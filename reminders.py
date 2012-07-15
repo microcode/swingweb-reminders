@@ -8,19 +8,21 @@ import sys
 import optparse
 import webapp2
 import logging
+import cgi
 
 from google.appengine.api import mail
+from google.appengine.ext import db
+from google.appengine.api import users
 
-registrationUrl = "http://www.swingweb.org/tools/comp/registrations/?org=NSW&format=htmlBody;encoding=UTF-8"
-#registrationUrl = "http://www.swingweb.org/tools/comp/registrations/?format=htmlBody;encoding=UTF-8"
-competitionsUrl = "https://swingweb.se/xml/?type=games&maxRows=1000"
+from email.header import Header
 
-warningDays = 5
-infoDays = 30
-
-mailServer = "localhost"
-mailSender = "tavlingspaminnelse@nackswinget.se"
-mailReceiver = "tavlingspaminnelse-nackswinget@googlegroups.com"
+class Configuration(db.Model):
+	registrations = db.StringProperty(required=True)
+	competitions = db.StringProperty(required=True)
+	warningDay = db.IntegerProperty(required=True)
+	infoDays = db.IntegerProperty(required=True)
+	sender = db.EmailProperty(required=True)
+	receiver = db.EmailProperty(required=True)	
 
 class Registration:
 	def __init__(self, classType, team, clubs, state):
@@ -85,7 +87,6 @@ class Registrations:
 		return self.results.has_key(id)
 
 	def __getitem__(self, item):
-		logging.info("Requesting items for %d: " % item)
 		return sorted(self.results[item], lambda x,y: cmp(y.classType, x.classType))
 
 class CompetitionType:
@@ -191,21 +192,26 @@ class Competitions:
 
 class MainHandler(webapp2.RequestHandler):
 	def get(self):
-		self.sendMessages()
-		self.response.out.write('Processing complete!')
+		query = Configuration.gql("")
+		config = query.get()
+		if config == None:
+			self.response.out.write("NOT_CONFIGURED")
+			return
 
-	def sendMessages(self):
-		registrations = Registrations(registrationUrl)
-		competitions = Competitions(competitionsUrl)
+		self.sendMessages(config)
+		self.response.out.write('OK')
+
+	def sendMessages(self, config):
+		registrations = Registrations(config.registrations)
+		competitions = Competitions(config.competitions)
 
 		now = datetime.datetime.now()
-		limit = now + datetime.timedelta(days = infoDays)
+		limit = now + datetime.timedelta(days = config.infoDays)
 
 		for id,competition in competitions.iteritems():
 
-			if (warningDays != (competition.direct - now).days):
-				#continue
-				pass
+			if (config.warningDay != (competition.direct - now).days):
+				continue
 
 			template = u'Sista anmälningdag för %s är %s.\nArrangör: %s\nTävlingsstart: %s\n\nAnmäl dig via http://www.swingweb.se/\n\n' % (competition.name, (competition.direct + datetime.timedelta(days = -1)).strftime('%Y-%m-%d'), competition.organizer,competition.start.strftime('%Y-%m-%d'))
 
@@ -221,9 +227,9 @@ class MainHandler(webapp2.RequestHandler):
 
 			template += u'\nInformation om tävlingen: http://www.swingweb.se/public/comp/game/index.php?id=%d\n' % (id)
 
-			template += u'\nTävlingsanmälningar de närmsta %d dagarna:\n\n' % (infoDays)
+			template += u'\nTävlingsanmälningar de närmsta %d dagarna:\n\n' % (config.infoDays)
 			for nid, ncomp in competitions.iteritems():
-				if (infoDays < (ncomp.direct - now).days) and ((ncomp.direct - now).days >= 0):
+				if (config.infoDays < (ncomp.direct - now).days) and ((ncomp.direct - now).days >= 0):
 					continue
 				template += u' %s - %s (Sista anmälningsdag: %s)\n' % (ncomp.start.strftime('%Y-%m-%d'), ncomp.name, (ncomp.direct + datetime.timedelta(days = -1)).strftime('%Y-%m-%d'))
 
@@ -231,12 +237,55 @@ class MainHandler(webapp2.RequestHandler):
 			#if competition.competitionType != CompetitionType.Unknown:
 			#	subject = u'[%s] %s' % (competition.competitionType,subject)
 
-			message = mail.EmailMessage(sender = u'Tävlingspåminnelse <%s>'.encode('utf-8') % mailSender, to = mailReceiver, subject = subject.encode('utf-8'), body = template.encode('utf-8'))
+			sender = (u'Tävlingspåminnelse <%s>' % (config.sender)).encode('utf-8')
+
+			message = mail.EmailMessage(sender = sender, to = config.receiver, subject = subject.encode('utf-8'), body = template.encode('utf-8'))
 			message.send()
 
-			break
+class SetupHandler(webapp2.RequestHandler):
+	def get(self):
+		query = Configuration.gql("")
+		config = query.get()
+		if config == None:
+			config = Configuration(registrations = "http://", competitions = "http://", warningDay = -1, infoDays = -1, sender = "user@example.com", receiver = "user@example.com")
 
-app = webapp2.WSGIApplication([('/mail/reminders', MainHandler)],
+		self.response.out.write("""
+<html>
+	<body>
+		<form method="post">
+			<div><span>Registrations</span><span><input type="text" name="registrations" value="%s"></span></div>
+			<div><span>Competitions</span><span><input type="text" name="competitions" value="%s"></span></div>
+			<div><span>Warning Day</span><span><input type="text" name="warningDay" value="%d"></span></div>
+			<div><span>Info Days</span><span><input type="text" name="infoDays" value="%d"></span></div>
+			<div><span>Sender</span><span><input type="text" name="sender" value="%s"></span></div>
+			<div><span>Receiver</span><span><input type="text" name="receiver" value="%s"></span></div>
+			<div><button>Save</button></div>
+		</form>
+	</body>
+</html>
+		""" % (config.registrations, config.competitions, config.warningDay, config.infoDays, config.sender, config.receiver))
+
+	def post(self):
+		query = Configuration.gql("")
+		config = query.get()
+
+		logging.info(self.request.get("competitions"))
+
+		if config == None:
+			config = Configuration(registrations = cgi.escape(self.request.get("registrations")), competitions = cgi.escape(self.request.get("competitions")), warningDay = int(cgi.escape(self.request.get("warningDay"))), infoDays = int(cgi.escape(self.request.get("infoDays"))), sender = cgi.escape(self.request.get("sender")), receiver = cgi.escape(self.request.get("receiver")))
+		else:
+			config.registrations = cgi.escape(self.request.get("registrations"))
+			config.competitions = cgi.escape(self.request.get("competitions"))
+			config.warningDay = int(cgi.escape(self.request.get("warningDay")))
+			config.infoDays = int(cgi.escape(self.request.get("infoDays")))
+			config.sender = cgi.escape(self.request.get("sender"))
+			config.receiver = cgi.escape(self.request.get("receiver")) 
+
+		config.put()
+
+		self.response.out.write("SAVED")
+
+app = webapp2.WSGIApplication([('/mail/reminders', MainHandler), ('/setup', SetupHandler)],
 			debug=True)
 
 

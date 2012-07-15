@@ -9,8 +9,15 @@ handlers:
   static_files: favicon.ico
   upload: favicon\.ico
 
-- url: .*
+- url: /setup
   script: reminders.app
+  login: admin
+
+- url: /mail/reminders
+  script: reminders.app
+
+- url: /.*
+  script: main.app
 
 libraries:
 - name: webapp2
