@@ -24,6 +24,9 @@ class Configuration(db.Model):
 	sender = db.EmailProperty(required=True)
 	receiver = db.EmailProperty(required=True)	
 
+class LastDate(db.Model):
+	date = db.DateTimeProperty(required=True)
+
 class Registration:
 	def __init__(self, classType, team, clubs, state):
 		self.classType = classType
@@ -189,6 +192,8 @@ class Competitions:
 	def iteritems(self):
 		return sorted(self.results.iteritems(), lambda x,y: cmp(x[1].start, y[1].start));
 
+	def iteritemsdirect(self):
+		return sorted(self.results.iteritems(), lambda x,y: cmp(x[1].direct, y[1].direct));
 
 class MainHandler(webapp2.RequestHandler):
 	def get(self):
@@ -198,49 +203,65 @@ class MainHandler(webapp2.RequestHandler):
 			self.response.out.write("NOT_CONFIGURED")
 			return
 
-		self.sendMessages(config)
+		query = LastDate.gql("")
+		lastDate = query.get()
+		if (lastDate == None):
+			lastDate = LastDate(date = datetime.datetime.combine(datetime.date.today(), datetime.time()))
+
+		self.sendMessages(config, lastDate)
+
+		lastDate.put()
 		self.response.out.write('OK')
 
-	def sendMessages(self, config):
+	def sendMessages(self, config, lastDate):
 		registrations = Registrations(config.registrations)
 		competitions = Competitions(config.competitions)
 
-		now = datetime.datetime.now()
+		now = datetime.datetime.combine(datetime.date.today(), datetime.time())
 		limit = now + datetime.timedelta(days = config.infoDays)
 
-		for id,competition in competitions.iteritems():
+		current = lastDate.date
 
-			if (config.warningDay != (competition.direct - now).days):
-				continue
-
-			template = u'Sista anmälningdag för %s är %s.\nArrangör: %s\nTävlingsstart: %s\n\nAnmäl dig via http://www.swingweb.se/\n\n' % (competition.name, (competition.direct + datetime.timedelta(days = -1)).strftime('%Y-%m-%d'), competition.organizer,competition.start.strftime('%Y-%m-%d'))
-
-			if registrations.has_key(id):
-				template += u'Nackswinget har för tillfället %d anmälda par till denna tävling:\n\n' % (len(registrations[id]))
-
-				for reg in registrations[id]:
-					template += u' %s - %s - %s (%s)\n' % (reg.classType, ', '.join(reg.team), ' / '.join(reg.clubs), reg.state)
-			else:
-				template += u'Nackswinget har för tillfället inga par anmälda till denna tävling.\n'
-
-			template += u'\nOm du redan är anmäld till tävlingen så behöver du inte göra det igen.\n'
-
-			template += u'\nInformation om tävlingen: http://www.swingweb.se/public/comp/game/index.php?id=%d\n' % (id)
-
-			template += u'\nTävlingsanmälningar de närmsta %d dagarna:\n\n' % (config.infoDays)
-			for nid, ncomp in competitions.iteritems():
-				if (config.infoDays < (ncomp.direct - now).days) and ((ncomp.direct - now).days >= 0):
+		while (current.date() <= now.date()):
+			logging.info(current)
+			for id,competition in competitions.iteritems():
+				if (config.warningDay != (competition.direct - current).days):
 					continue
-				template += u' %s - %s (Sista anmälningsdag: %s)\n' % (ncomp.start.strftime('%Y-%m-%d'), ncomp.name, (ncomp.direct + datetime.timedelta(days = -1)).strftime('%Y-%m-%d'))
 
-			subject = competition.name
-			#if competition.competitionType != CompetitionType.Unknown:
-			#	subject = u'[%s] %s' % (competition.competitionType,subject)
+				template = u'Sista anmälningdag för %s är %s.\nArrangör: %s\nTävlingsstart: %s\n\nAnmäl dig via http://www.swingweb.se/\n\n' % (competition.name, (competition.direct + datetime.timedelta(days = -1)).strftime('%Y-%m-%d'), competition.organizer,competition.start.strftime('%Y-%m-%d'))
 
-			sender = (u'Tävlingspåminnelse <%s>' % (config.sender)).encode('utf-8')
+				if registrations.has_key(id):
+					template += u'Nackswinget har för tillfället %d anmälda par till denna tävling:\n\n' % (len(registrations[id]))
 
-			message = mail.EmailMessage(sender = sender, to = config.receiver, subject = subject.encode('utf-8'), body = template.encode('utf-8'))
-			message.send()
+					for reg in registrations[id]:
+						template += u' %s - %s - %s (%s)\n' % (reg.classType, ', '.join(reg.team), ' / '.join(reg.clubs), reg.state)
+				else:
+					template += u'Nackswinget har för tillfället inga par anmälda till denna tävling.\n'
+
+				template += u'\nOm du redan är anmäld till tävlingen så behöver du inte göra det igen.\n'
+
+				template += u'\nInformation om tävlingen: http://www.swingweb.se/public/comp/game/index.php?id=%d\n' % (id)
+
+				template += u'\nTävlingsanmälningar de närmsta %d dagarna:\n\n' % (config.infoDays)
+				for nid, ncomp in competitions.iteritemsdirect():
+					if (config.infoDays < (ncomp.direct - now).days) or ((ncomp.direct - now).days < 0):
+						continue
+					template += u' %s - %s (Tävlingsstart: %s)\n' % ((ncomp.direct + datetime.timedelta(days = -1)).strftime('%Y-%m-%d'), ncomp.name, ncomp.start.strftime('%Y-%m-%d'))
+
+				subject = competition.name
+				#if competition.competitionType != CompetitionType.Unknown:
+				#	subject = u'[%s] %s' % (competition.competitionType,subject)
+
+				sender = (u'Tävlingspåminnelse <%s>' % (config.sender)).encode('utf-8')
+
+				message = mail.EmailMessage(sender = sender, to = config.receiver, subject = subject.encode('utf-8'), body = template.encode('utf-8'))
+				message.send()
+				logging.info(template.encode('utf-8'))
+				logging.info("MAIL SENT")
+
+			current += datetime.timedelta(days = 1)
+
+		lastDate.date = current
 
 class SetupHandler(webapp2.RequestHandler):
 	def get(self):

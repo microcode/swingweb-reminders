@@ -1,4 +1,4 @@
 cron:
 - description: Trigger sending of reminders
   url: /mail/reminders
-  schedule: every day 05:00 
+  schedule: every 6 hours 
