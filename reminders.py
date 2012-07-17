@@ -9,6 +9,7 @@ import optparse
 import webapp2
 import logging
 import cgi
+import os
 
 from google.appengine.api import mail
 from google.appengine.ext import db
@@ -23,6 +24,7 @@ class Configuration(db.Model):
 	infoDays = db.IntegerProperty(required=True)
 	sender = db.EmailProperty(required=True)
 	receiver = db.EmailProperty(required=True)	
+	errors = db.EmailProperty()
 
 class LastDate(db.Model):
 	date = db.DateTimeProperty(required=True)
@@ -197,6 +199,22 @@ class Competitions:
 
 class MainHandler(webapp2.RequestHandler):
 	def get(self):
+
+ 		local = os.environ.get('SERVER_SOFTWARE','').startswith('Development')
+		if local:
+			self.runRequest()
+		else:
+			try:
+				self.runRequest()
+			except Exception, e:
+				query = Configuration.gql("")
+				config = query.get()
+				if config != None:
+					message = mail.EmailMessage(sender = config.sender, to = config.errors, subject = "An error occured", body = "An error occured while running script, please review the logs.")
+					message.send()
+				raise e	
+
+	def runRequest(self):
 		query = Configuration.gql("")
 		config = query.get()
 		if config == None:
@@ -231,7 +249,7 @@ class MainHandler(webapp2.RequestHandler):
 				template = u'Sista anmälningdag för %s är %s.\nArrangör: %s\nTävlingsstart: %s\n\nAnmäl dig via http://www.swingweb.se/\n\n' % (competition.name, (competition.direct + datetime.timedelta(days = -1)).strftime('%Y-%m-%d'), competition.organizer,competition.start.strftime('%Y-%m-%d'))
 
 				if registrations.has_key(id):
-					template += u'Nackswinget har för tillfället %d anmälda par till denna tävling:\n\n' % (len(registrations[id]))
+					template += u'Nackswinget har för tillfället %d anmälda par/trior till denna tävling:\n\n' % (len(registrations[id]))
 
 					for reg in registrations[id]:
 						template += u' %s - %s - %s (%s)\n' % (reg.classType, ', '.join(reg.team), ' / '.join(reg.clubs), reg.state)
@@ -280,11 +298,12 @@ class SetupHandler(webapp2.RequestHandler):
 			<div><span>Info Days</span><span><input type="text" name="infoDays" value="%d"></span></div>
 			<div><span>Sender</span><span><input type="text" name="sender" value="%s"></span></div>
 			<div><span>Receiver</span><span><input type="text" name="receiver" value="%s"></span></div>
+			<div><span>Errors</span><span><input type="text" name="errors" value="%s"></span></div>
 			<div><button>Save</button></div>
 		</form>
 	</body>
 </html>
-		""" % (config.registrations, config.competitions, config.warningDay, config.infoDays, config.sender, config.receiver))
+		""" % (config.registrations, config.competitions, config.warningDay, config.infoDays, config.sender, config.receiver, config.errors))
 
 	def post(self):
 		query = Configuration.gql("")
@@ -293,14 +312,15 @@ class SetupHandler(webapp2.RequestHandler):
 		logging.info(self.request.get("competitions"))
 
 		if config == None:
-			config = Configuration(registrations = cgi.escape(self.request.get("registrations")), competitions = cgi.escape(self.request.get("competitions")), warningDay = int(cgi.escape(self.request.get("warningDay"))), infoDays = int(cgi.escape(self.request.get("infoDays"))), sender = cgi.escape(self.request.get("sender")), receiver = cgi.escape(self.request.get("receiver")))
+			config = Configuration(registrations = cgi.escape(self.request.get("registrations")), competitions = cgi.escape(self.request.get("competitions")), warningDay = int(cgi.escape(self.request.get("warningDay"))), infoDays = int(cgi.escape(self.request.get("infoDays"))), sender = cgi.escape(self.request.get("sender")), receiver = cgi.escape(self.request.get("receiver")), errors = cgi.escape(self.request.get("errors")))
 		else:
 			config.registrations = cgi.escape(self.request.get("registrations"))
 			config.competitions = cgi.escape(self.request.get("competitions"))
 			config.warningDay = int(cgi.escape(self.request.get("warningDay")))
 			config.infoDays = int(cgi.escape(self.request.get("infoDays")))
 			config.sender = cgi.escape(self.request.get("sender"))
-			config.receiver = cgi.escape(self.request.get("receiver")) 
+			config.receiver = cgi.escape(self.request.get("receiver"))
+			config.errors = cgi.escape(self.request.get("errors")) 
 
 		config.put()
 
